@@ -13,39 +13,42 @@
  *  5) Remove -lsocket from the Makefile.
  */
 #include <stdio.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include <sys/socket.h>                                 // socket网络编程核心头文件
+#include <sys/types.h>                                  // 系统数据结构
+#include <netinet/in.h>                                 // 网络地址结构体
+#include <arpa/inet.h>                                  // IP地址转换函数
+#include <unistd.h>                                     // UNIX标准函数（close, fork等）
 #include <ctype.h>
 #include <strings.h>
 #include <string.h>
-#include <sys/stat.h>
-//#include <pthread.h>
-#include <sys/wait.h>
+#include <sys/stat.h>                                   // 文件状态
+//#include <pthread.h>             
+#include <sys/wait.h>                                   // 进程等待(waitpid)
 #include <stdlib.h>
 #include <stdint.h>
 
-#define ISspace(x) isspace((int)(x))
+// 宏定义
+#define ISspace(x) isspace((int)(x))                    // 判断字符是否为空格 用于解析HTTP请求时跳过空白字符
 
-#define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
-#define STDIN   0
-#define STDOUT  1
-#define STDERR  2
+#define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"      // 服务器标识，在HTTP响应头中发送给客户端
+// 标准文件描述符定义（用于CGI执行时的输入输出重定向）
+#define STDIN   0                                       // 标准输入文件描述符
+#define STDOUT  1                                       // 标准输出文件描述符
+#define STDERR  2                                       // 标准错误文件描述符
 
-void accept_request(void *);
-void bad_request(int);
-void cat(int, FILE *);
-void cannot_execute(int);
-void error_die(const char *);
-void execute_cgi(int, const char *, const char *, const char *);
-int get_line(int, char *, int);
-void headers(int, const char *);
-void not_found(int);
-void serve_file(int, const char *);
-int startup(u_short *);
-void unimplemented(int);
+// 函数声明
+void accept_request(void *);                                          // 处理客户端请求的主函数
+void bad_request(int);                                                // 返回404错误
+void cat(int, FILE *);                                                // 将文件内容发送到客户端
+void cannot_execute(int);                                             // 返回CGI执行错误
+void error_die(const char *);                                         // 错误处理函数
+void execute_cgi(int, const char *, const char *, const char *);      // 执行CGI程序
+int get_line(int, char *, int);                                       // 从socket读取一行数据
+void headers(int, const char *);                                      // 发送HTTP响应头
+void not_found(int);                                                  // 返回404错误
+void serve_file(int, const char *);                                   // 处理静态文件请求
+int startup(u_short *);                                               // 启动HTTP服务器，完成socket创建、端口绑定和监听
+void unimplemented(int);                                              // 返回未实现的方法错误
 
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
@@ -279,7 +282,7 @@ void execute_cgi(int client, const char *path,
             sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
             putenv(length_env);
         }
-        execl(path,path,(char *) NULL);                // 在原代码的基础上修改execl函数的调用
+        execl(path,path,(char *) NULL);                // 在原代码的基础上修正execl函数的调用
         exit(0);
     } else {    /* parent */
         close(cgi_output[1]);
@@ -426,35 +429,57 @@ void serve_file(int client, const char *filename)
  * Parameters: pointer to variable containing the port to connect on
  * Returns: the socket */
 /**********************************************************************/
+
+/*函数功能：启动HTTP服务器，完成socket创建、端口绑定和监听
+  参数：指向端口号的指针，如果传入0则动态分配一个端口
+  返回值：监听socket*/
 int startup(u_short *port)
 {
-    int httpd = 0;
-    int on = 1;
-    struct sockaddr_in name;
+    // =============== 1.变量定义 ===============
+    int httpd = 0;                    // 监听socket描述符
+    int on = 1;                       // socket选项标志
+    struct sockaddr_in name;          // 服务器地址结构体
 
+    // =============== 2.创建socket ===============
+    // PF_INET：使用IPv4协议族
+    // SOCK_STREAM：使用TCP流式套接字（面向连接、可靠传输）
+    // 0：使用默认的协议（TCP）
     httpd = socket(PF_INET, SOCK_STREAM, 0);
     if (httpd == -1)
-        error_die("socket");
-    memset(&name, 0, sizeof(name));
-    name.sin_family = AF_INET;
-    name.sin_port = htons(*port);
-    name.sin_addr.s_addr = htonl(INADDR_ANY);
+        error_die("socket");                       // 创建失败则报错退出
+
+    // =============== 3.初始化服务器地址结构 ===============
+    memset(&name, 0, sizeof(name));                // 将服务器地址结构体清零，避免垃圾数据
+    name.sin_family = AF_INET;                     // 使用IPv4地址族
+    name.sin_port = htons(*port);                  // 将端口号转换为网络字节序（大端）
+    name.sin_addr.s_addr = htonl(INADDR_ANY);      // IP地址：监听所有网卡 0.0.0.0
+
+    // =============== 4.设置socket选项 地址复用(SO_REUSEADDR) 防止端口占用===============
+    // 作用：允许快速重启服务器，避免端口占用
+    // 当服务器异常退出后，端口可能处于TIME_WAIT状态，导致无法重新绑定，设置SO_REUSEADDR选项可以避免此问题
     if ((setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) < 0)  
     {  
         error_die("setsockopt failed");
     }
+
+    // =============== 5.绑定socket ===============
     if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
         error_die("bind");
+
+    // =============== 6.动态端口分配处理 ===============
+    // 如果传入的端口为0，系统会自动分配一个可用端口
     if (*port == 0)  /* if dynamically allocating a port */
     {
         socklen_t namelen = sizeof(name);
-        if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)
+        if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)         // 通过getsockname获取实际分配的端口号，并通过指针返回给调用者
             error_die("getsockname");
-        *port = ntohs(name.sin_port);
+        *port = ntohs(name.sin_port);           // 将端口号转换为主机字节序（小端）
     }
-    if (listen(httpd, 5) < 0)
-        error_die("listen");
-    return(httpd);
+
+    // =============== 7.开始监听连接 ===============
+    if (listen(httpd, 5) < 0)             // 开始监听连接，参数5表示请求队列的最大长度
+        error_die("listen");              // 当多个客户端同时连接时，超过5个的会被拒绝或等待
+    return(httpd);                        // 返回监听socket，供后续accept使用
 }
 
 /**********************************************************************/
@@ -485,32 +510,39 @@ void unimplemented(int client)
 }
 
 /**********************************************************************/
-
+/* 函数功能：主函数 HTTP服务器入口 */
 int main(void)
 {
-    int server_sock = -1;
-    u_short port = 4000;
-    int client_sock = -1;
-    struct sockaddr_in client_name;
-    socklen_t  client_name_len = sizeof(client_name);
+    //                =============== 1.定义变量 ===============
+    int server_sock = -1;                            // 服务器监听socket
+    u_short port = 4000;                             // 监听端口号
+    int client_sock = -1;                            // 客户端连接socket
+    struct sockaddr_in client_name;                  // 客户端地址信息
+    socklen_t  client_name_len = sizeof(client_name);  // 获取客户端地址信息长度
     // pthread_t newthread;                          // 为运行而注释掉
 
-    server_sock = startup(&port);
+    // =============== 2.启动服务器（创建socket，绑定端口，开始监听）===============
+    server_sock = startup(&port);                     // 调用startup函数启动服务器，传入端口号
     printf("httpd running on port %d\n", port);
 
+    // =============== 3.等待客户端连接并处理请求 ===============
     while (1)
     {
+        // accept()阻塞调用，没有客户端连接时程序暂定在这里
         client_sock = accept(server_sock,
                 (struct sockaddr *)&client_name,
                 &client_name_len);
         if (client_sock == -1)
-            error_die("accept");
-        // accept_request(&client_sock);
-        accept_request((void *)(intptr_t)client_sock); 
+            error_die("accept");                         // 接受连接失败则报错
+        // accept_request(&client_sock);                 // 原代码中的accept_request函数调用存在问题，参数类型不匹配
+
+        // 处理客户端请求（单进程串行处理），(intptr_t) 强制转换是为了消除指针和整数之间的警告
+        accept_request((void *)(intptr_t)client_sock);  
         /*if (pthread_create(&newthread , NULL, (void *)accept_request, (void *)(intptr_t)client_sock) != 0)
             perror("pthread_create");*/               // 为运行而注释掉
     }
 
+    // =============== 4.关闭服务器socket并退出 ===============
     close(server_sock);
 
     return(0);
