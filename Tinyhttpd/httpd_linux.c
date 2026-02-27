@@ -55,85 +55,115 @@ void unimplemented(int);                                              // 返回�
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
+
+/* 函数功能：处理客户端HTTP请求的核心函数
+ * 参数：客户端socket*/
+
 void accept_request(void *arg)
 {
-    int client = (intptr_t)arg;
-    char buf[1024];
-    size_t numchars;
-    char method[255];
-    char url[255];
-    char path[512];
-    size_t i, j;
-    struct stat st;
-    int cgi = 0;      /* becomes true if server decides this is a CGI
+    // =========== 1.变量初始化 ===========
+    int client = (intptr_t)arg;             // 客户端socket 从main函数传递过来
+    char buf[1024];                         // 缓冲区 存储读取的数据
+    size_t numchars;                        // 实际读取的字符数 
+    char method[255];                      // HTTP方法 存储GET或POST
+    char url[255];                          // URL 存储请求的URL
+    char path[512];                         // 路径 存储文件路径
+    size_t i, j;                            // 循环变量
+    struct stat st;                         // 文件状态结构体
+    int cgi = 0;      /* becomes true if server decides this is a CGI   // 是否为CGI请求的标志
                        * program */
-    char *query_string = NULL;
+    char *query_string = NULL;              // 查询字符串 存储GET请求的参数
 
-    numchars = get_line(client, buf, sizeof(buf));
+    // =========== 2.读取请求行并解析HTTP方法 ===========
+    numchars = get_line(client, buf, sizeof(buf));                 // 从socket读取一行数据
     i = 0; j = 0;
+    // 解析HTTP方法，读取字符直到遇到空格
     while (!ISspace(buf[i]) && (i < sizeof(method) - 1))
     {
         method[i] = buf[i];
         i++;
     }
-    j=i;
-    method[i] = '\0';
+    j=i;                                       // 记录HTTP方法的结束位置
+    method[i] = '\0';                          // 结束HTTP方法字符串
 
+    // 检查HTTP方法是否为GET或POST，否则返回未实现的方法错误
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
         unimplemented(client);
         return;
     }
 
+    // 如果HTTP方法为POST，则一定是CGI程序，需要处理请求体数据
     if (strcasecmp(method, "POST") == 0)
         cgi = 1;
 
+    // =========== 3.读取请求行并解析URL ===========
     i = 0;
+    // 跳过方法后面的空格
     while (ISspace(buf[j]) && (j < numchars))
         j++;
+
+    // 解析URL，读取字符直到遇到空格或换行符
     while (!ISspace(buf[j]) && (i < sizeof(url) - 1) && (j < numchars))
     {
         url[i] = buf[j];
         i++; j++;
     }
-    url[i] = '\0';
+    url[i] = '\0';                          // 结束URL字符串
 
+    // =========== 4.GET请求处理查询字符串 ===========
+    // 检查是否有查询字符串（？后面的部分）
     if (strcasecmp(method, "GET") == 0)
     {
-        query_string = url;
+        query_string = url;                   // 查询字符串指向URL
+
+        // 查找？字符的位置
         while ((*query_string != '?') && (*query_string != '\0'))
             query_string++;
+
+        // 找到了？说明有查询参数
         if (*query_string == '?')
         {
-            cgi = 1;
-            *query_string = '\0';
-            query_string++;
+            cgi = 1;                          // 一定是CGI程序
+            *query_string = '\0';             // 结束查询字符串
+            query_string++;                   // 跳过？ 指针移到参数部分
         }
     }
 
-    sprintf(path, "htdocs%s", url);
+    // =========== 5.构建文件路径并检查 ===========
+    sprintf(path, "htdocs%s", url);          // 构建文件路径
+
+    // 如果url以/结尾，默认添加index.html
     if (path[strlen(path) - 1] == '/')
         strcat(path, "index.html");
+
+    // 检查文件是否存在 stat函数用于获取文件状态，如果文件不存在则返回-1
     if (stat(path, &st) == -1) {
+        // 若文件不存在，则丢弃所有请求头，返回404错误
         while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
         not_found(client);
     }
     else
     {
+        // 如果是目录，默认访问index.html st.st_mode & S_IFMT提取文件类型
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/index.html");
-        if ((st.st_mode & S_IXUSR) ||
-                (st.st_mode & S_IXGRP) ||
-                (st.st_mode & S_IXOTH)    )
+
+        // 判断是否为CGI程序
+        if ((st.st_mode & S_IXUSR) ||                 // 所有者可执行
+                (st.st_mode & S_IXGRP) ||             // 组用户可执行
+                (st.st_mode & S_IXOTH)    )           // 其他人可执行
             cgi = 1;
+
+        // 根据CGI标志决定处理方式
         if (!cgi)
-            serve_file(client, path);
+            serve_file(client, path);             // 不是CGI则处理静态文件请求
         else
-            execute_cgi(client, path, method, query_string);
+            execute_cgi(client, path, method, query_string);  // 是CGI则执行CGI程序
     }
 
-    close(client);
+    close(client);              // 关闭客户端socket
 }
 
 /**********************************************************************/
@@ -157,21 +187,21 @@ void bad_request(int client)
 }
 
 /**********************************************************************/
-/* Put the entire contents of a file out on a socket.  This function
- * is named after the UNIX "cat" command, because it might have been
- * easier just to do something like pipe, fork, and exec("cat").
- * Parameters: the client socket descriptor
- *             FILE pointer for the file to cat */
-/**********************************************************************/
+/* 函数功能：将文件内容发送到客户端（类似于UNIX的cat命令）
+ * 参数：client - 客户端socket描述符
+ *       resource - 要发送的文件指针
+ * 实现方式：循环读取文件 → 发送到socket，直到文件结束
+ **********************************************************************/
 void cat(int client, FILE *resource)
 {
-    char buf[1024];
+    char buf[1024];                                    // 文件读取缓冲区
 
-    fgets(buf, sizeof(buf), resource);
-    while (!feof(resource))
+    // =========== 循环读取并发送文件内容 ===========
+    fgets(buf, sizeof(buf), resource);                 // 读取第一行（最多1023字符）
+    while (!feof(resource))                            // 循环直到文件末尾
     {
-        send(client, buf, strlen(buf), 0);
-        fgets(buf, sizeof(buf), resource);
+        send(client, buf, strlen(buf), 0);             // 将读取的内容发送到客户端
+        fgets(buf, sizeof(buf), resource);             // 继续读取下一行
     }
 }
 
@@ -347,40 +377,61 @@ int get_line(int sock, char *buf, int size)
 }
 
 /**********************************************************************/
-/* Return the informational HTTP headers about a file. */
-/* Parameters: the socket to print the headers on
- *             the name of the file */
-/**********************************************************************/
+/* 函数功能：发送HTTP响应头（200 OK状态）
+ * 参数：client - 客户端socket描述符
+ *       filename - 文件名（本实现中未使用，可用于判断Content-Type）
+ * HTTP响应头格式：
+ *   HTTP/1.0 200 OK\r\n
+ *   Server: jdbhttpd/0.1.0\r\n
+ *   Content-Type: text/html\r\n
+ *   \r\n  （空行表示头部结束）
+ **********************************************************************/
 void headers(int client, const char *filename)
 {
     char buf[1024];
-    (void)filename;  /* could use filename to determine file type */
+    (void)filename;                                    // 故意不用filename，避免编译器警告
+                                                       // 实际可根据扩展名设置Content-Type（如.jpg→image/jpeg）
 
-    strcpy(buf, "HTTP/1.0 200 OK\r\n");
+    // =========== 1.发送状态行 ===========
+    strcpy(buf, "HTTP/1.0 200 OK\r\n");               // HTTP/1.0 200 OK 表示请求成功处理
     send(client, buf, strlen(buf), 0);
-    strcpy(buf, SERVER_STRING);
+
+    // =========== 2.发送服务器标识 ===========
+    strcpy(buf, SERVER_STRING);                        // Server: jdbhttpd/0.1.0\r\n
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
+
+    // =========== 3.发送内容类型 ===========
+    sprintf(buf, "Content-Type: text/html\r\n");       // 固定返回text/html，可优化为根据文件类型判断
     send(client, buf, strlen(buf), 0);
-    strcpy(buf, "\r\n");
+
+    // =========== 4.发送空行表示头部结束 ===========
+    strcpy(buf, "\r\n");                               // 空行是HTTP头部和响应体的分隔符
     send(client, buf, strlen(buf), 0);
 }
 
 /**********************************************************************/
-/* Give a client a 404 not found status message. */
-/**********************************************************************/
+/* 函数功能：返回404 Not Found错误页面
+ * 参数：client - 客户端socket描述符
+ * 返回内容：HTTP 404状态 + HTML错误页面
+ **********************************************************************/
 void not_found(int client)
 {
     char buf[1024];
 
-    sprintf(buf, "HTTP/1.0 404 NOT FOUND\r\n");
+    // =========== 1.发送HTTP响应头 ===========
+    sprintf(buf, "HTTP/1.0 404 NOT FOUND\r\n");       // 状态行：404表示资源未找到
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, SERVER_STRING);
+
+    sprintf(buf, SERVER_STRING);                       // 服务器标识
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, "Content-Type: text/html\r\n");
+
+    sprintf(buf, "Content-Type: text/html\r\n");       // 内容类型为HTML
     send(client, buf, strlen(buf), 0);
-    sprintf(buf, "\r\n");
+
+    sprintf(buf, "\r\n");                              // 空行分隔头部和响应体
     send(client, buf, strlen(buf), 0);
+
+    // =========== 2.发送HTML错误页面内容 ===========
     sprintf(buf, "<HTML><TITLE>Not Found</TITLE>\r\n");
     send(client, buf, strlen(buf), 0);
     sprintf(buf, "<BODY><P>The server could not fulfill\r\n");
@@ -394,31 +445,45 @@ void not_found(int client)
 }
 
 /**********************************************************************/
-/* Send a regular file to the client.  Use headers, and report
- * errors to client if they occur.
- * Parameters: a pointer to a file structure produced from the socket
- *              file descriptor
- *             the name of the file to serve */
-/**********************************************************************/
+/* 函数功能：处理静态文件请求，发送文件内容给客户端
+ * 参数：client - 客户端socket描述符
+ *       filename - 要发送的文件路径
+ * 执行流程：
+ *   1. 丢弃所有请求头（HTTP协议要求）
+ *   2. 打开文件，失败返回404
+ *   3. 发送HTTP 200响应头
+ *   4. 发送文件内容
+ *   5. 关闭文件
+ **********************************************************************/
 void serve_file(int client, const char *filename)
 {
-    FILE *resource = NULL;
+    FILE *resource = NULL;                             // 文件指针
     int numchars = 1;
     char buf[1024];
 
-    buf[0] = 'A'; buf[1] = '\0';
-    while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
+    // =========== 1.丢弃所有请求头 ===========
+    // HTTP请求格式：请求行 + 请求头 + 空行 + 请求体
+    // 对于GET请求静态文件，请求头信息（User-Agent、Cookie等）不需要处理
+    // 但必须读完，因为TCP是流式协议，不读完会影响后续读取
+    buf[0] = 'A'; buf[1] = '\0';                       // 初始化buf，确保第一次strcmp不为0，进入循环
+    while ((numchars > 0) && strcmp("\n", buf))        // 循环读取直到空行（只有\n的行表示头部结束）
         numchars = get_line(client, buf, sizeof(buf));
 
-    resource = fopen(filename, "r");
+    // =========== 2.打开文件 ===========
+    resource = fopen(filename, "r");                   // 以只读方式打开文件
     if (resource == NULL)
-        not_found(client);
+        not_found(client);                             // 文件不存在，返回404错误
     else
     {
-        headers(client, filename);
-        cat(client, resource);
+        // =========== 3.发送HTTP响应头 ===========
+        headers(client, filename);                     // 发送200 OK状态 + 响应头
+
+        // =========== 4.发送文件内容 ===========
+        cat(client, resource);                         // 循环读取文件并发送到客户端
     }
-    fclose(resource);
+
+    // =========== 5.关闭文件 ===========
+    fclose(resource);                                  // 关闭文件释放资源
 }
 
 /**********************************************************************/
